@@ -286,7 +286,6 @@ template <class in_Server, class from_Server, class from_Client>
       perror("shmat");
       return;
     }
-    //childFlag = new bool;
     *childFlag = true;
 
     key = 6236;
@@ -327,7 +326,6 @@ template <class in_Server, class from_Server, class from_Client>
       perror("shmat");
       return;
     }
-    //maxConnections = new int;
     *maxConnections = maxConn;
 
     key = 3613;
@@ -341,6 +339,7 @@ template <class in_Server, class from_Server, class from_Client>
       perror("shmat");
       return;
     }
+    headCon->num = -2; // Special state for first node in our linked list
     headCon->next = NULL;
   }
    
@@ -410,8 +409,7 @@ template <class in_Server, class from_Server, class from_Client>
     int con = 0;
     connection * cursor = headCon;
     ++*numConnections; // We're getting another client, so add one
-    if(!cursor) { // If this is the first connection
-      headCon = new connection;
+    if(cursor->num == -2) { // If this is the first connection
       cursor = headCon;
       cursor->next = NULL;
       return cursor->num = con;
@@ -495,7 +493,6 @@ template <class in_Server, class from_Server, class from_Client>
 	    // #3
 	    ////////////////////RECEIVE & READ STATE//////////////	    
 	    //!cout << "\t\tWaiting to read from client" << endl;
-	    cout << "Sock connection: " << newsockfd << " and pointer: " << &newsockfd << endl;
 	    rv = read(newsockfd, (void *)&input, sizeof(input));
 	    if(rv < 0)
 	      cout << "Error " << "Error reading from socket\n";	    
