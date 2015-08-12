@@ -157,14 +157,8 @@ template <class from_Server, class from_Client>
   // How we write to the server
   void writeData(from_Client input) {
     if(*writePending);
-    //!;cout << "\t\tWRITE PENDING IN WRITE-DATA FUNCTION\n";
-
-    //!cout << "ON THE USER LEVEL P: " << writePending << endl;
-    //!cout << "\tin this 'writeData' we are inserting: " << input << endl;
     *shm_fromClient = input;
     *writePending = false;
-    //if(!*writePending)
-    //  cout << "\t\tWRITE NOTE PENDING\n";
   }
   void skipWrite() {
     *writePending = false;
@@ -189,13 +183,7 @@ template <class from_Server, class from_Client>
             ///////////WRITE call for the server//////////////
             while(*writePending) { 
 	      ;
-	      /*
-		if(!*writePending)
-		cout << "\t\tWRITE NOTE PENDING\n";
-		else
-		cout << "\t\tWRITE PENDING\n"; */
 	    }
-	    //!cout << "\tWriting to the server\n";
             rv = write(sockfd, (void *)shm_fromClient, sizeof(from_Client));
             if(rv < 0)
 	      perror("could not write to socket\n");
@@ -203,7 +191,6 @@ template <class from_Server, class from_Client>
             
             //#5
             //////////READ CALL for the server//////////////
-	    //!cout << "\tReading from the server\n";
             rv = read(sockfd, &copy, sizeof(from_Server));      
             if(rv < 0)
 	      cout << "Error " << "could not read from socket\n";
@@ -211,7 +198,6 @@ template <class from_Server, class from_Client>
             *isAccessingServer = true;
             *shm_fromServer = copy; // Dump the data over...
             *isAccessingServer = false;
-	    //!cout << "\tWe read " << *shm_fromServer << " from the server\n" << endl;
 	  }
 	// Client connection ended... we close here...
       }
@@ -253,7 +239,6 @@ template <class in_Server, class from_Server, class from_Client>
       perror("shmget");
       return;
     }
-
     //Attach the from_server segment to our data space
     if((int)(shm_inServer = (in_Server *)shmat(shmid, NULL, 0)) == -1) {
       perror("shmat");
@@ -266,7 +251,6 @@ template <class in_Server, class from_Server, class from_Client>
       perror("shmget");
       return;
     }
-
     //Attach the boolean value to our data space
     if((int)(isAccessingData = (bool *)shmat(shmid, NULL, 0)) == -1) {
       perror("shmat");
@@ -279,8 +263,7 @@ template <class in_Server, class from_Server, class from_Client>
     if((shmid = shmget(key, sizeof(bool), IPC_CREAT | 0666)) < 0) {
       perror("shmget");
       return;
-    }
-      
+    }      
     //Attach the child creating bit segment to our shared memory
     if((int)(childFlag = (bool *)shmat(shmid, NULL, 0)) == -1) {
       perror("shmat");
@@ -293,7 +276,6 @@ template <class in_Server, class from_Server, class from_Client>
       perror("shmget");
       return;
     }
-      
     //Attach the do we continue the server communication segment to our data space
     if((int)(serverRunning = (bool *)shmat(shmid, NULL, 0)) == -1) {
       perror("shmat");
@@ -306,8 +288,7 @@ template <class in_Server, class from_Server, class from_Client>
     if((shmid = shmget(key, sizeof(int), IPC_CREAT | 0666)) < 0) {
       perror("shmget");
       return;
-    }
-      
+    }     
     //Attach the connection tracking number to our server
     if((int)(numConnections = (int *)shmat(shmid, NULL, 0)) == -1) {
       perror("shmat");
@@ -320,7 +301,6 @@ template <class in_Server, class from_Server, class from_Client>
       perror("shmget");
       return;
     }
-      
     //Attach the max connections number to our server
     if((int)(maxConnections = (int *)shmat(shmid, NULL, 0)) == -1) {
       perror("shmat");
@@ -332,8 +312,7 @@ template <class in_Server, class from_Server, class from_Client>
     if((shmid = shmget(key, sizeof(connection), IPC_CREAT | 0666)) < 0) {
       perror("shmget");
       return;
-    }
-      
+    } 
     //Attach the max connections number to our server
     if((int)(headCon = (connection *)shmat(shmid, NULL, 0)) == -1) {
       perror("shmat");
@@ -393,9 +372,8 @@ template <class in_Server, class from_Server, class from_Client>
     connection * cursor = headCon;
     if(connectionNum > *numConnections)
       return;
-    for(int i = 0; i < connectionNum; i++) {
+    for(int i = 0; i < connectionNum; i++)
       cursor = cursor->next;
-    }
     if(!cursor->num) {
       --*numConnections;
       cursor->num = -1;    
@@ -432,20 +410,19 @@ template <class in_Server, class from_Server, class from_Client>
     }
   }
 
-  int getMaxPlayers() {
-    return *maxConnections;
+  int getMaxPlayers() { 
+    return *maxConnections; 
+  }
+ 
+ in_Server * getDataDirect() { 
+   return shm_inServer; 
   }
 
-  in_Server * getDataDirect() {
-    return shm_inServer;
+  bool getAccessStatus() { 
+    return *isAccessingData;  
   }
 
-  bool getAccessStatus() {
-    return *isAccessingData;
-  }
-  
-  void turnOff() { 
-    *serverRunning = false;
+  void turnOff() { *serverRunning = false; 
   }
 
   void start() {
@@ -478,8 +455,7 @@ template <class in_Server, class from_Server, class from_Client>
     }
     cout << "\tFound a client\n";
 
-    ++*numConnections;
-    if(newsockfd < 0 || (*numConnections >= *maxConnections)) { // Socket is bad or the server is "full"
+    if(newsockfd < 0 || (*numConnections == *maxConnections -1)) { // Socket is bad or the server is "full"
       cout << "Error " << "Error on accept\n";
       return;
     }
@@ -488,8 +464,7 @@ template <class in_Server, class from_Server, class from_Client>
 	int idNumber = getConnectionNum();
 	from_Client input;
 	from_Server response; 	
-	while(*serverRunning) 
-	  {
+	while(*serverRunning) {
 	    // #3
 	    ////////////////////RECEIVE & READ STATE//////////////	    
 	    //!cout << "\t\tWaiting to read from client" << endl;
