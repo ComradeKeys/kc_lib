@@ -1,12 +1,11 @@
 #include <iostream>
-#include "boringStructs.h"
 #include "kc_skynet.h"
 
 using namespace std;
 
 struct ServerMemory {
   int x[32];
-  int size = 0;
+  int size;
 };
 
 /****************************************************
@@ -25,9 +24,9 @@ struct ServerMemory {
  * the 'id' field is to identify which number
  * connection this is (1st, 2nd, 3rd connection...). 
  ***************************************************/
-int serverFunction(ServerMemory *sm, int *client, int id) {   
+int serverFunction(ServerMemory *sm, int *client, int id) {
+  cout << "Connection on " << id << " being made...\n";
   int x = sm->size;
-  cout << "SERVER IN_MEMORY VALUE IS " << x << endl;
   if(x < 7) {
     sm->size += 1;
     return sm->size;
@@ -45,18 +44,5 @@ int main(int argc, char ** argv) {
   // Per-client function, PORT_NUMBER, MAXIMUM NUMBER OF CONNECTIONS
   server.init(&serverFunction, 4500, 16);
   server.start();
-  cout << "Server started\n";
-
-  int response;
-  char prompt;
-  while(1) {            
-    cout << "Want to check the connections?" << endl;
-    cin >> prompt;
-    cout << "We currently have " << server.getNumPlayers() << "/" << server.getMaxPlayers() << " playing.\n";
-  }
-  
-  server.turnOff();
-  cout << "Server ended\n";
-   
-  return 1;
+  return 0;
 }

@@ -1,3 +1,4 @@
+// Procedural dependencies
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/ipc.h>
@@ -6,6 +7,8 @@
 #include "netdb.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
+// Object dependencies
 #include <strings.h>
 #include <iostream>
 #include <unistd.h>
@@ -17,116 +20,110 @@
 #define MAX_CONNECTIONS 16
 using namespace std;
 
+enum CLIENT_FLAGS {ASYNC_SERVER = 0, AWAIT_SERVER = 1};
 
 template <class from_Server, class from_Client>
-  class kc_Client {
+ class kc_Client {
  private:
   // Shared memory stuff
   from_Server * shm_fromServer;
   from_Client * shm_fromClient;
-  bool * isAccessingServer;
+  bool * accessingFromServerData;
   bool * writePending;
-  bool * runClient;
-   
-  // Strictly networkings stuff 
+
+  // Current state flags
+  bool initialized;
+  bool clientRunning;
+  
+  // Our process id
+  int pid;
+
+  // Strictly networkings stuff
   int sockfd;
   struct sockaddr_in serv_addr;
   struct hostent *server;
-
-  void initSharedMemory()
-  {
-    cout << "\tInitializing client...\n";
-
+  
+  int initSharedMemory() {
     ////////////////////SHARED MEMORY STUFF/////////////////            
     // Build our from_server info segment
     int shmid;
     key_t key = 2357;
     if((shmid = shmget(key, sizeof(from_Server), IPC_CREAT | 0666)) < 0) {
       perror("shmget");
-      return;
+      return 1;
     }
 
     //Attach the from_server segment to our data space
     if((int)(shm_fromServer = (from_Server *)shmat(shmid, NULL, 0)) == -1) {
       perror("shmat");
-      return;
+      return 1;
     }
-    //    shm_fromServer = new from_Server;      
       
     // Build our from_client info segment      
     key = 7266;
     if((shmid = shmget(key, sizeof(from_Client), IPC_CREAT | 0666)) < 0) {
       perror("shmget");
-      return;
+      return 1;
     }
 
     //Attach the from_client segment to our data space
     if((int)(shm_fromClient = (from_Client *)shmat(shmid, NULL, 0)) == -1) {
       perror("shmat");
-      return;
+      return 1;
     }
-    //    shm_fromClient = new from_Client;
-
+    
     // Build our canRead bools info segment      
     key = 7497;
     if((shmid = shmget(key, sizeof(bool), IPC_CREAT | 0666)) < 0) {
       perror("shmget");
-      return;
+      return 1;
     }
-
+    
     //Attach the from_client segment to our data space
-    if((int)(isAccessingServer = (bool *)shmat(shmid, NULL, 0)) == -1) {
+    if((int)(accessingFromServerData = (bool *)shmat(shmid, NULL, 0)) == -1) {
       perror("shmat");
-      return;
+      return 1;
     }
-    //isAccessingServer = new bool;
-    *isAccessingServer = false;
+    *accessingFromServerData = false;
       
     key = 5216;
     if((shmid = shmget(key, sizeof(bool), IPC_CREAT | 0666)) < 0) {
       perror("shmget");
-      return;
+      return 1;
     }
       
     //Attach the from_client segment to our data space
     if((int)(writePending = (bool *)shmat(shmid, NULL, 0)) == -1) {
       perror("shmat");
-      return;
+      return 1;
     }
-    //    writePending = new bool;
     *writePending = true;
-
-    key = 3312;
-    if((shmid = shmget(key, sizeof(bool), IPC_CREAT | 0666)) < 0) {
-      perror("shmget");
-      return;
-    }
-      
-    //Attach the do we continue the client communication segment to our data space
-    if((int)(runClient = (bool *)shmat(shmid, NULL, 0)) == -1) {
-      perror("shmat");
-      return;
-    }
-    //    runClient = new bool;
-    *runClient = true;
-    cout << "\tFinisihed initializing client\n";
+    return 0;
   }
    
  public:
-  kc_Client() {;}
+  kc_Client() {initialized = false;}
   kc_Client(string ip, int port) {
-    init(ip, port);
+     initialized = false;
+     init(ip, port);
   }
-  void init(string ip, int port) {      
-    initSharedMemory();
-    *runClient = true;
-    /////////////////////SOCKET STUFF//////////////////////      
+  int init(string ip, int port) {
+     if(!initialized) { 
+        if(initSharedMemory())
+           return 1;
+     }
+
+    // Defaults that bank on possible errors
+    pid = -1;
+    clientRunning = false;
+    
+    /////////////////////SOCKET STUFF///////////////
     // #1
     ///////////////Make Socket, DON'T BIND//////////       
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if(sockfd < 0) {
       cout << "Error " << "Could not create socket\n";
-      return;
+      return 1;
     }
             
     // #2
@@ -134,7 +131,7 @@ template <class from_Server, class from_Client>
     server = gethostbyname(ip.c_str());
     if(server == NULL) {
       cout << "Error " << "no such host available\n";
-      return;
+      return 1;
     }
       
     bzero((char *) &serv_addr, sizeof(serv_addr));
@@ -142,67 +139,90 @@ template <class from_Server, class from_Client>
     bcopy((char *) server->h_addr, (char *)&serv_addr.sin_addr.s_addr, server->h_length); 
 
     serv_addr.sin_port = htons(port);
+    initialized = true;
+    return 0;
   }      
   from_Server * getServerDataP() { return shm_fromServer;}
   from_Client * getClientDataP() { return shm_fromClient;}
+
   // How we read from the the server once we have a new packet.
-  from_Server getServerUpdate()  {
+  from_Server getServerUpdate(bool waitFlag = 1) {
+     if(waitFlag == AWAIT_SERVER) 
+        while(!*writePending) { usleep(1);} // Await the server's response
+
     from_Server copy;
-    while(*isAccessingServer){;}
-    *isAccessingServer = true; // Block the data from being read/written as we read it
+    if(!initialized)
+       return copy; // Return garbage value
+    while(*accessingFromServerData) {usleep(1);}
+    *accessingFromServerData = true;  // Block the data from being accessed as use it
     copy = *shm_fromServer;
-    *isAccessingServer = false; // Free the data for writing/reading
-    return copy; // This may be the same data as before... Potentially optimize this..
+    *accessingFromServerData = false; // Free the data for writing/reading
+    return copy;                // This may be the same data as before.
   }
   // How we write to the server
   void writeData(from_Client input) {
-    if(*writePending);
+    if(!initialized) return;
+    while(!*writePending){usleep(1);} // Wait until it's time to write
     *shm_fromClient = input;
     *writePending = false;
   }
   void skipWrite() {
-    *writePending = false;
+    if(!initialized) return;
+    while(!*writePending){usleep(1);} // Wait until it's time to write
+    *writePending = false;   //The same data is sent in the next packet
   }
-  void start() {
+  int start() {
+    if(!initialized) {
+       printf("Cannot start unitialized client\n");
+       return 1;
+    }
     int rv; // Error checking
       
     // #3
     ////////////Connect to the server/////////////////
     if(connect(sockfd, (sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-      cout << "Error " << "could not connect\n";
-      return;
+      printf("Error: could not connect\n");
+      return 1;
     }
-       
+
+    clientRunning = true;
     from_Server copy; // what we copy over from the server's data
-    pid_t pid = fork();
-    if(pid == 0)
-      {
-	while(*runClient) 
-	  {
+    pid = fork();
+    if(pid == 0) {
+         while(1) {
             // #4
             ///////////WRITE call for the server//////////////
-            while(*writePending) { 
-	      ;
-	    }
+            while(*writePending) { usleep(1);}
             rv = write(sockfd, (void *)shm_fromClient, sizeof(from_Client));
-            if(rv < 0)
-	      perror("could not write to socket\n");
-            *writePending = true;
-            
+            if(rv < 0) {
+              printf("could not write to socket\n");
+              return 1;
+            }
+              
             //#5
             //////////READ CALL for the server//////////////
             rv = read(sockfd, &copy, sizeof(from_Server));      
-            if(rv < 0)
-	      cout << "Error " << "could not read from socket\n";
-            while(*isAccessingServer){;}
-            *isAccessingServer = true;
+            if(rv < 0) {
+              printf("Error could not read from socket\n");
+              return 1;
+            }
+            while(*accessingFromServerData) { usleep(1);}
+            *accessingFromServerData = true;
             *shm_fromServer = copy; // Dump the data over...
-            *isAccessingServer = false;
+            *accessingFromServerData = false;
+
+            *writePending = true; // It's time to write again
 	  }
-	// Client connection ended... we close here...
-      }
+      }// Client connection ended... closed here
+    return 0;
   }
-  void turnOff() {*runClient = false;}
+
+  void turnOff() {
+     if(pid) {
+        kill(pid,SIGTERM); // Kill the child process
+        clientRunning = false;
+     }
+  }
 };
 
 //Linked-list node for connection tracking (the number of each connection)
@@ -212,151 +232,133 @@ struct connection{
 };
 
 template <class in_Server, class from_Server, class from_Client>
-  class kc_Server {
+ class kc_Server {
  private:
   // Shared memory stuff
   in_Server * shm_inServer;
   bool * isAccessingData;
-  bool * serverRunning;
-  bool * childFlag;
   int  * numConnections;
   int * maxConnections;
   connection *headCon;
-  from_Server (*function)(in_Server*, from_Client*, int); // The function that the client-server operates on. Each thread processes data here.
+  from_Server (*function)(in_Server*, from_Client*, int); 
    
   // Strictly networking stuff 
   int sockfd, newsockfd, clienlen;
-  int rv; // Error checking
+  int rv;           // Error checking
   struct sockaddr_in serv_addr, cli_addr;
 
-  void initSharedMemory(int maxConn)
-  {
+  bool initialized; // Object security
+
+  int initSharedMemory(int maxConn) { //maxConn may become depricated in further releases
     ////////////////////SHARED MEMORY STUFF/////////////////            
     // Build our from_server info segment
     int shmid;
     key_t key = 2578;
     if((shmid = shmget(key, sizeof(in_Server), IPC_CREAT | 0666)) < 0) {
       perror("shmget");
-      return;
+      return 1;
     }
     //Attach the from_server segment to our data space
     if((int)(shm_inServer = (in_Server *)shmat(shmid, NULL, 0)) == -1) {
       perror("shmat");
-      return;
+      return 1;
     }
 
     // Build our canRead bools info segment      
     key = 9897;
     if((shmid = shmget(key, sizeof(bool), IPC_CREAT | 0666)) < 0) {
       perror("shmget");
-      return;
+      return 1;
     }
     //Attach the boolean value to our data space
     if((int)(isAccessingData = (bool *)shmat(shmid, NULL, 0)) == -1) {
       perror("shmat");
-      return;
+      return 1;
     }
     //isAccessingData = new bool;
     *isAccessingData = false;
       
-    key = 8280;
-    if((shmid = shmget(key, sizeof(bool), IPC_CREAT | 0666)) < 0) {
-      perror("shmget");
-      return;
-    }      
-    //Attach the child creating bit segment to our shared memory
-    if((int)(childFlag = (bool *)shmat(shmid, NULL, 0)) == -1) {
-      perror("shmat");
-      return;
-    }
-    *childFlag = true;
-
-    key = 6236;
-    if((shmid = shmget(key, sizeof(bool), IPC_CREAT | 0666)) < 0) {
-      perror("shmget");
-      return;
-    }
-    //Attach the do we continue the server communication segment to our data space
-    if((int)(serverRunning = (bool *)shmat(shmid, NULL, 0)) == -1) {
-      perror("shmat");
-      return;
-    }
-    //serverRunning = new bool;
-    *serverRunning = true;
-
     key = 2789;
     if((shmid = shmget(key, sizeof(int), IPC_CREAT | 0666)) < 0) {
       perror("shmget");
-      return;
+      return 1;
     }     
     //Attach the connection tracking number to our server
     if((int)(numConnections = (int *)shmat(shmid, NULL, 0)) == -1) {
       perror("shmat");
-      return;
+      return 1;
     }
     *numConnections = 0;
 
     key = 2797;
     if((shmid = shmget(key, sizeof(int), IPC_CREAT | 0666)) < 0) {
       perror("shmget");
-      return;
+      return 1;
     }
     //Attach the max connections number to our server
     if((int)(maxConnections = (int *)shmat(shmid, NULL, 0)) == -1) {
       perror("shmat");
-      return;
+      return 1;
     }
     *maxConnections = maxConn;
-
+    
     key = 3613;
     if((shmid = shmget(key, sizeof(connection), IPC_CREAT | 0666)) < 0) {
       perror("shmget");
-      return;
+      return 1;
     } 
-    //Attach the max connections number to our server
+    //Attach the head connection node to our server
     if((int)(headCon = (connection *)shmat(shmid, NULL, 0)) == -1) {
       perror("shmat");
-      return;
+      return 1;
     }
     headCon->num = -2; // Special state for first node in our linked list
     headCon->next = NULL;
+    return 0;
   }
    
  public:
-  kc_Server() {;}
+  kc_Server() {initialized = false;}
   kc_Server(from_Server (* funct)(in_Server *, from_Client*, int), int portno, int maxConns = MAX_CONNECTIONS) {
-    init(funct, portno, maxConns);
+     initialized = false;
+     init(funct, portno, maxConns);
   }
-  void init(from_Server (* funct)(in_Server *, from_Client*, int), int portno, int maxConns = MAX_CONNECTIONS) {      
-    initSharedMemory(maxConns);
+  int init(from_Server (* funct)(in_Server *, from_Client*, int), int portno, int maxConns = MAX_CONNECTIONS) {      
+    if(initSharedMemory(maxConns)) return 1;
     function = funct; // Assign our processing function
 
     // #1
-    ///////////////BUILD OUR SOCKET, STRUCTURE, BIND THEM//////////////////
+    ///////////////BUILD OUR SOCKET, STRUCTURE, BIND THEM/////////////////
     // Setup our "int" that is a socket
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if(sockfd < 0)
-      cout << "Error " << "Error opening port\n";
-
+    if(sockfd < 0) {
+      printf("Error opening port\n");
+      return 1;
+    }    
+      
     // Initialize everything to null
     bzero((char *) &serv_addr, sizeof(serv_addr));
 
     // Set our server address values
     serv_addr.sin_family = AF_INET;         // TCP assignement (presumably)
-    serv_addr.sin_addr.s_addr = INADDR_ANY; // Get whatever address we have on the PC
+    serv_addr.sin_addr.s_addr = INADDR_ANY; // Get whatevere address we are
     serv_addr.sin_port = htons(portno);     // Assign the port
 
-    // OK. SO here is the magic. We combine the socket we have with that server address value
-    // to "combine them." Prof. Vinod Pillai gives an excellent tutorial on youtube. We can
-    // bind different sockets we create to the same (or a copy of the) serv_addr for multiple
-    // distinct connections on the same port.
-    if(bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
-      cout << "Error " << "Error on binding\n";
-
+    // OK. We combine the socket we have with that server address value
+    // to "combine them." Prof. Vinod Pillai gives an excellent tutorial YT
+    // We can bind different sockets we create to the same (or a copy of the) 
+    // serv_addr for multiple distinct connections on the same port.
+    if(bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) {
+      printf("Error on binding\n");
+      return 1;
+    }
+      
     // #2
     /////////////////////LISTEN STATE////////////////////
-    // We say we want to handle up to x clients at the same time... WOW!
-    listen(sockfd, 5); // I read somewhere that more than "5" causes issues for some reason...
+    // We say we want to handle up to x clients at the same time
+    listen(sockfd, 5); // I read somewhere that more than "5" is bad
+    initialized = true; // We are ready to start the server
+    return 0;
   }
   in_Server getDataCopy() {
     in_Server copy = *shm_inServer;
@@ -368,25 +370,25 @@ template <class in_Server, class from_Server, class from_Client>
   }
 
   // Make a connection available on our linked list
-  void removeConnection(int connectionNum) {
+  void dropConnection(int connectionNum) {
     connection * cursor = headCon;
     if(connectionNum > *numConnections)
       return;
     for(int i = 0; i < connectionNum; i++)
       cursor = cursor->next;
-    if(!cursor->num) {
+    if(cursor->num != -1) {
       --*numConnections;
       cursor->num = -1;    
     }
   }
 
   // Allocate a connection number for the newly connected client
-  int getConnectionNum() {
+  int registerConnection() {
     if(*numConnections > *maxConnections)
       return -1;
     int con = 0;
     connection * cursor = headCon;
-    ++*numConnections; // We're getting another client, so add one
+    ++*numConnections;      // We're getting another client, so add one
     if(cursor->num == -2) { // If this is the first connection
       cursor = headCon;
       cursor->next = NULL;
@@ -406,7 +408,7 @@ template <class in_Server, class from_Server, class from_Client>
       cursor->next = new connection;
       cursor = cursor->next;
       cursor->next = NULL;
-      return cursor->num = *numConnections;
+      return (cursor->num = *numConnections) - 1;
     }
   }
 
@@ -414,85 +416,64 @@ template <class in_Server, class from_Server, class from_Client>
     return *maxConnections; 
   }
  
- in_Server * getDataDirect() { 
+  in_Server * getDataDirect() { 
    return shm_inServer; 
   }
 
   bool getAccessStatus() { 
     return *isAccessingData;  
   }
+  
+  int start() {
+    // Make sure we aren't running an uninitialized server
+    if(!initialized) return 1;
 
-  void turnOff() { *serverRunning = false; 
-  }
-
-  void start() {
     // Dynamic size made conveniently available in this variable
     clienlen = sizeof(cli_addr);
 
     //Fork process portion
     pid_t pid = 1;
-    //pid = fork(); 
-     
-    /*(
-      if(pid) // Get the parent process out of here.
-      return;
-      cout << "Spawning server listener process\n";
-      while(*serverRunning) { 
-      *childFlag = true; */
     while(pid) { // Add conditional for the server being running or NOT running
-      cout << "\tMASTER_PROCESS: Listening for clients...\n";
+      cout << "\tListening for clients...\n";
       newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, (socklen_t *)&clienlen);
       pid = fork();
-      /*
-	if(*childFlag) { // If we can't use PID values then let's use shared memory!
-	cout << "\tTRUE FOR CHILD FLAG\n";
-	*childFlag = false;
-	break;
-	}
-	else {
-	cout << "\tFALSE FOR CHILD FLAG\n";
-	} */
     }
-    cout << "\tFound a client\n";
 
-    if(newsockfd < 0 || (*numConnections == *maxConnections -1)) { // Socket is bad or the server is "full"
-      cout << "Error " << "Error on accept\n";
+    int idNumber = -1;
+    if(newsockfd < 0 || (*numConnections == *maxConnections -1)) {
+      printf("Error on accept\n"); //Socket bad OR server is "full"
       return;
     }
     else {
-	cout << "\tPROCESS: Connection spanned...\n";
-	int idNumber = getConnectionNum();
+	idNumber = registerConnection();
 	from_Client input;
 	from_Server response; 	
-	while(*serverRunning) {
-	    // #3
+	while(1) {
+	    // #3 
 	    ////////////////////RECEIVE & READ STATE//////////////	    
-	    //!cout << "\t\tWaiting to read from client" << endl;
 	    rv = read(newsockfd, (void *)&input, sizeof(input));
-	    if(rv < 0)
-	      cout << "Error " << "Error reading from socket\n";	    
+	    if(rv < 1) // Connection dropped 
+              break; 
 
 	    // #4 
-	    // Run function pointer that was passed into our server. This involves the client and server's data
-	    //!cout << "GOT DATA OF " << input << "- NOW TEXTING THEM BACK!!!!\n";
-	    while(*isAccessingData){usleep(1);} // Data protection for write data problems in 'while' loop!!!!!!!!!!
+	    // Run function pointer that was passed into our server
+	    while(*isAccessingData){usleep(1);} // Data protection for write data
 	    *isAccessingData = true; 	   
 	    if(!(response = function(shm_inServer, &input, idNumber))) 
 	      break; // When the function returns a 'NULL' value we exit our loop
 	    *isAccessingData = false;
-
+            
 	    // #5
 	    ///////////////////RESPOND BACK////////////////////////
 	    rv = write(newsockfd, &response, sizeof(from_Server));
-	    if(rv < 0) {
-	      cout << "Error!\n" << rv << " (Error writing to socket)\n";
-	    }
-	    //else
-	    //!cout << "\t\tWrote back " << response << " to the client\n";
+	    if(rv < 1)
+              break;
 	  }
       }
     // Close this server connection here. 
-    --*numConnections;
+    dropConnection(idNumber);    
+    printf("\tConnection dropped\n");
+    exit(0);
   }
 };
 
