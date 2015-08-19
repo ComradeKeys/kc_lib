@@ -1,0 +1,64 @@
+#include "kc_sound.h"
+
+/*F******************************************************************
+ * 
+ * 
+ * PURPOSE : 
+ *
+ * RETURN :  
+ *
+ * NOTES :   
+ *F*/
+kc_sound::kc_sound() {
+
+  // Initialize the environment
+  alutInit(0, NULL);
+
+  // Capture errors
+  alGetError();
+
+}
+/*F******************************************************************
+ * 
+ * 
+ * PURPOSE : 
+ *
+ * RETURN :  
+ *
+ * NOTES :   
+ *F*/
+kc_sound::~kc_sound() {
+
+  // Clean up sources and buffers
+  alDeleteSources(1, &source);
+  alDeleteBuffers(1, &buffer);
+
+  // Exit everything
+  alutExit();
+}
+/*F******************************************************************
+ * 
+ * 
+ * PURPOSE : 
+ *
+ * RETURN :  
+ *
+ * NOTES :   
+ *F*/
+void kc_sound::play_wav(const char *filename) {
+
+  // Load pcm data into buffer
+  buffer = alutCreateBufferFromFile(filename);
+
+  // Create sound source (use buffer to fill source)
+  alGenSources(1, &source);
+  alSourcei(source, AL_BUFFER, buffer);
+  // Play
+  alSourcePlay(source);
+
+  // Wait for the song to complete
+  do {
+    alGetSourcei(source, AL_SOURCE_STATE, &state);
+  } while (state == AL_PLAYING);
+
+}

@@ -1,0 +1,20 @@
+#pragma once
+
+#include <AL/al.h>
+#include <AL/alc.h>
+#include <AL/alut.h>
+#include <stdio.h>
+
+class kc_sound {
+
+ public:
+  kc_sound();
+  ~kc_sound();
+  void play_wav(const char *filename);
+  
+ private:
+  ALuint buffer;
+  ALuint source;
+  int state;
+
+};
