@@ -1,0 +1,4 @@
+Compile with: 
+	g++ *.cpp -lSDL -lGL -lGLU
+
+// This particular section has not been optimized from SDL 1.2 to SDL 2
