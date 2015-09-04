@@ -1,8 +1,8 @@
-client: 
+client: clientDriver.cpp kc_skynet.h
 	g++ -fpermissive -w -o client clientDriver.cpp
 
-server:
+server: serverDriver.cpp kc_skynet.h
 	g++ -fpermissive -w -o server serverDriver.cpp
 
 clean:
-	rm client && rm server
+	rm client server

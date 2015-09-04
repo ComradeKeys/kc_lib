@@ -20,7 +20,7 @@
 #define MAX_CONNECTIONS 16
 using namespace std;
 
-enum CLIENT_FLAGS {ASYNC_SERVER = 0, AWAIT_SERVER = 1};
+enum CLIENT_FLAGS {ASYNC = 0, SYNC = 1}; // Rename ASYNC, SYNC
 
 template <class from_Server, class from_Client>
  class kc_Client {
@@ -122,7 +122,7 @@ template <class from_Server, class from_Client>
     ///////////////Make Socket, DON'T BIND//////////       
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if(sockfd < 0) {
-      cout << "Error " << "Could not create socket\n";
+      printf("Error:Could not create socket\n");
       return 1;
     }
             
@@ -130,7 +130,7 @@ template <class from_Server, class from_Client>
     ////////////Setup server info based on CLI////////
     server = gethostbyname(ip.c_str());
     if(server == NULL) {
-      cout << "Error " << "no such host available\n";
+      printf("Error: no such host available\n");
       return 1;
     }
       
@@ -147,7 +147,7 @@ template <class from_Server, class from_Client>
 
   // How we read from the the server once we have a new packet.
   from_Server getServerUpdate(bool waitFlag = 1) {
-     if(waitFlag == AWAIT_SERVER) 
+     if(waitFlag == SYNC) 
         while(!*writePending) { usleep(1);} // Await the server's response
 
     from_Server copy;
@@ -369,6 +369,16 @@ template <class in_Server, class from_Server, class from_Client>
     return *numConnections;
   }
 
+  // Verify that this connection is still active
+  bool isConnected(int connectionNum) {
+    connection * cursor = headCon;
+    if(connectionNum > *numConnections)
+      return false;
+    for(int i = 0; i < connectionNum; i++)
+      cursor = cursor->next;
+    return (cursor->num >= 0);
+  }
+
   // Make a connection available on our linked list
   void dropConnection(int connectionNum) {
     connection * cursor = headCon;
@@ -434,7 +444,7 @@ template <class in_Server, class from_Server, class from_Client>
     //Fork process portion
     pid_t pid = 1;
     while(pid) { // Add conditional for the server being running or NOT running
-      cout << "\tListening for clients...\n";
+      printf("\tListening for clients...\n");
       newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, (socklen_t *)&clienlen);
       pid = fork();
     }
